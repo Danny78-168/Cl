@@ -20,7 +20,6 @@ export default {
         const body = await request.json();
         console.log("收到 Webhook Body:", JSON.stringify(body));
 
-        // 🚀 直接內嵌完整帳號清單，確保 100% 穩定讀取
         const ACCOUNTS = [
           {
       "name": "吳芷晴",
@@ -137,7 +136,9 @@ export default {
               if (change.field === "replies") {
                 const commentId = change.value.id;
                 const fromUserId = change.value.from ? change.value.from.id : null;
-                console.get?.("捕獲到新留言 ID:", commentId, "來自用戶:", fromUserId);
+                
+                // ⚠️ 修正這裡：改用正確的 console.log
+                console.log("捕獲到新留言 ID:", commentId, "來自用戶:", fromUserId);
 
                 for (const acc of ACCOUNTS) {
                   const targetUserId = acc.user_id;
