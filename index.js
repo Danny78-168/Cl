@@ -1,3 +1,6 @@
+// 全域記憶體去重池（記錄最近已處理的留言 ID，防止 Meta 重複推送）
+const processedComments = new Set();
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -20,7 +23,7 @@ export default {
         const body = await request.json();
         console.log("收到 Webhook Body:", JSON.stringify(body));
 
-        // ⚠️ 請填入你完整的帳號資料，並務必補上每個帳號的 threads_username (例如 "casey786626")
+        // ⚠️ 請補上完整的 accounts 清單與各自的 username
         const ACCOUNTS = [
           {
       "name": "吳芷晴",
@@ -127,14 +130,11 @@ export default {
       "user_id": "27669839782693594",
       "token": "THAAUHgwPgYZC5BYmE0czhVbm1qaTJYb0ptak9rS0V1ajQyYlFXakdRRl9rZAEY4emtrWmhGc2VtUmNpMzBjWWh4RnhTY2ZAZAelYycG02bzFRbzFHd3M5eUVNaTB4NElrazNLYzJfUDNsNWZAkZAUNxcmFXVG91S3VzX0tjUWpsRGZA3NlI3ZAwZDZD"
     }
-          // 其他帳號依此類推加入 username...
+          // 其他帳號依此類推...
         ];
 
-        // 建立所有受控帳號的 ID 與 Username 清單，供快速防禦過濾
-        const managedUserIds = ACCOUNTS.map(a => a.user_id);
         const managedUsernames = ACCOUNTS.map(a => a.username?.toLowerCase()).filter(Boolean);
 
-        // 處理 Meta Threads Webhook (values 陣列)
         if (Array.isArray(body.values)) {
           for (const item of body.values) {
             if (item.field === "replies" && item.value) {
@@ -142,29 +142,32 @@ export default {
               const commenter = (item.value.username || "").toLowerCase();
               const ownerId = item.value.root_post?.owner_id;
 
-              // 🛑 防線 1：檢查留言者是否為受控的任何機器人帳號（防止自己回覆自己陷入死循環）
+              // 🛑 防線 1：檢查此留言是否已經回覆過（防 Meta 重試重複發送）
+              if (processedComments.has(commentId)) {
+                console.log(`[去重攔截] 留言 ID: ${commentId} 已經處理過，跳過不重複回覆`);
+                continue;
+              }
+
+              // 🛑 防線 2：過濾機器人受控帳號自己留言
               if (managedUsernames.includes(commenter)) {
-                console.log(`[防循環攔截] 留言者 ${commenter} 是受控機器人帳號，跳過不回覆`);
+                console.log(`[防循環] 留言者 ${commenter} 為受控帳號，跳過`);
                 continue;
               }
 
-              // 🛑 防線 2：如果該回覆帶有 from.id，比對 ID
-              const fromId = item.value.from?.id;
-              if (fromId && managedUserIds.includes(fromId)) {
-                console.log(`[防循環攔截] 留言者 ID ${fromId} 在受控名單內，跳過不回覆`);
-                continue;
+              // 立即將此留言標記為已處理（鎖定）
+              processedComments.add(commentId);
+              // 防止記憶體暴增，限制集合最多留存最新 500 筆
+              if (processedComments.size > 500) {
+                const firstKey = processedComments.values().next().value;
+                processedComments.delete(firstKey);
               }
 
-              console.log(`[values] 捕獲有效新留言 ID: ${commentId}, 來自真人: ${commenter}`);
-
-              // 尋找該貼文作者執行回覆
-              const postOwnerAccount = ACCOUNTS.find(acc => acc.user_id === ownerId);
-
-              if (postOwnerAccount) {
-                console.log(`貼文擁有者 [${postOwnerAccount.name}] 執行單次回覆...`);
-                await autoReply(commentId, postOwnerAccount.user_id, postOwnerAccount.token);
-              } else {
-                console.log(`貼文作者 (ID: ${ownerId}) 不在當前受控清單中，不予處理`);
+              // 尋找貼文作者回覆
+              const postOwner = ACCOUNTS.find(acc => acc.user_id === ownerId);
+              if (postOwner) {
+                console.log(`[單次回覆] 由作者 [${postOwner.name}] 執行回覆...`);
+                // 將回覆交由背景或直接等待完成
+                await autoReply(commentId, postOwner.user_id, postOwner.token);
               }
             }
           }
@@ -172,16 +175,17 @@ export default {
 
         return new Response("EVENT_RECEIVED", { status: 200 });
       } catch (error) {
-        console.log("Webhook 處理發生嚴重錯誤:", error);
+        console.log("Webhook 處理異常:", error);
         return new Response("Error", { status: 500 });
       }
     }
+
     return new Response("🤖 OSC168 Threads Webhook OK!", { status: 200 });
   }
 };
 
 async function autoReply(commentId, userId, token) {
-  const replyMessage = "感謝留言！🔥 通道細節已準備好，請直接加賴洽詢👉 @ osc168";
+  const replyMessage = "感謝留言！🔥 通道細節已準備好，請直接加賴洽詢👉 @osc168";
   const createUrl = `https://graph.threads.net/v1.0/${userId}/threads`;
   const createData = new URLSearchParams({
     media_type: "TEXT",
@@ -206,6 +210,6 @@ async function autoReply(commentId, userId, token) {
       console.log("發布回覆結果:", JSON.stringify(pubJson));
     }
   } catch (e) {
-    console.log("自動回覆執行失敗:", e);
+    console.log("自動回覆失敗:", e);
   }
 }
