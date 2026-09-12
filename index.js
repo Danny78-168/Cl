@@ -183,7 +183,7 @@ export default {
 };
 
 async function autoReply(commentId, userId, token) {
-  const replyMessage = "感謝留言！🔥 請直接加官方洽詢👉 @osc168";
+  const replyMessage = "感謝留言！🔥 請直接加官方LINE洽詢👉 @osc168";
   const createUrl = `https://graph.threads.net/v1.0/${userId}/threads`;
   const createData = new URLSearchParams({
     media_type: "TEXT",
