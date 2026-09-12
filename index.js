@@ -126,6 +126,7 @@ export default {
       "user_id": "27669839782693594",
       "token": "THAAUHgwPgYZC5BYmE0czhVbm1qaTJYb0ptak9rS0V1ajQyYlFXakdRRl9rZAEY4emtrWmhGc2VtUmNpMzBjWWh4RnhTY2ZAZAelYycG02bzFRbzFHd3M5eUVNaTB4NElrazNLYzJfUDNsNWZAkZAUNxcmFXVG91S3VzX0tjUWpsRGZA3NlI3ZAwZDZD"
     }
+  ]
         ];
 
         if (body.object === "threads" || body.object === "instagram") {
@@ -137,7 +138,6 @@ export default {
                 const commentId = change.value.id;
                 const fromUserId = change.value.from ? change.value.from.id : null;
                 
-                // ⚠️ 修正這裡：改用正確的 console.log
                 console.log("捕獲到新留言 ID:", commentId, "來自用戶:", fromUserId);
 
                 for (const acc of ACCOUNTS) {
@@ -168,7 +168,7 @@ export default {
 
 async function autoReply(commentId, userId, token) {
   const replyMessage = "感謝留言！🔥 通道細節已準備好，請直接加賴洽詢👉 @osc168";
-  const createUrl = `https://graph.threads.net/v1.0/${userId}/threads`;
+  const createUrl = `https://graph.threads.net/v1.0/${userId}/threads`; // 這裡已修正加上 $ 符號
   const createData = new URLSearchParams({
     media_type: "TEXT",
     text: replyMessage,
