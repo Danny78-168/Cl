@@ -20,6 +20,7 @@ export default {
         const body = await request.json();
         console.log("收到 Webhook Body:", JSON.stringify(body));
 
+        // ⚠️ 請填入你完整的帳號資料，並務必補上每個帳號的 threads_username (例如 "casey786626")
         const ACCOUNTS = [
           {
       "name": "吳芷晴",
@@ -126,55 +127,44 @@ export default {
       "user_id": "27669839782693594",
       "token": "THAAUHgwPgYZC5BYmE0czhVbm1qaTJYb0ptak9rS0V1ajQyYlFXakdRRl9rZAEY4emtrWmhGc2VtUmNpMzBjWWh4RnhTY2ZAZAelYycG02bzFRbzFHd3M5eUVNaTB4NElrazNLYzJfUDNsNWZAkZAUNxcmFXVG91S3VzX0tjUWpsRGZA3NlI3ZAwZDZD"
     }
+          // 其他帳號依此類推加入 username...
         ];
 
-        // 處理格式 A：Meta Threads Webhook (values 陣列)
+        // 建立所有受控帳號的 ID 與 Username 清單，供快速防禦過濾
+        const managedUserIds = ACCOUNTS.map(a => a.user_id);
+        const managedUsernames = ACCOUNTS.map(a => a.username?.toLowerCase()).filter(Boolean);
+
+        // 處理 Meta Threads Webhook (values 陣列)
         if (Array.isArray(body.values)) {
           for (const item of body.values) {
             if (item.field === "replies" && item.value) {
               const commentId = item.value.id;
-              const commenter = item.value.username;
+              const commenter = (item.value.username || "").toLowerCase();
               const ownerId = item.value.root_post?.owner_id;
 
-              console.log(`[values] 抓取到新留言 ID: ${commentId}, 留言者: ${commenter}, 貼文主人: ${ownerId}`);
+              // 🛑 防線 1：檢查留言者是否為受控的任何機器人帳號（防止自己回覆自己陷入死循環）
+              if (managedUsernames.includes(commenter)) {
+                console.log(`[防循環攔截] 留言者 ${commenter} 是受控機器人帳號，跳過不回覆`);
+                continue;
+              }
 
-              // 尋找貼文所屬的帳號進行回覆
+              // 🛑 防線 2：如果該回覆帶有 from.id，比對 ID
+              const fromId = item.value.from?.id;
+              if (fromId && managedUserIds.includes(fromId)) {
+                console.log(`[防循環攔截] 留言者 ID ${fromId} 在受控名單內，跳過不回覆`);
+                continue;
+              }
+
+              console.log(`[values] 捕獲有效新留言 ID: ${commentId}, 來自真人: ${commenter}`);
+
+              // 尋找該貼文作者執行回覆
               const postOwnerAccount = ACCOUNTS.find(acc => acc.user_id === ownerId);
 
               if (postOwnerAccount) {
-                if (commenter === postOwnerAccount.name) {
-                  console.log(`作者自己留言，跳過: ${postOwnerAccount.name}`);
-                  continue;
-                }
-                console.log(`貼文擁有者 [${postOwnerAccount.name}] 執行自動回覆...`);
+                console.log(`貼文擁有者 [${postOwnerAccount.name}] 執行單次回覆...`);
                 await autoReply(commentId, postOwnerAccount.user_id, postOwnerAccount.token);
               } else {
-                // 如果找不到對應的 owner_id，則讓清單中所有未重複的帳號回覆
-                for (const acc of ACCOUNTS) {
-                  if (commenter === acc.name) continue;
-                  console.log(`由帳號 [${acc.name}] 執行自動回覆...`);
-                  await autoReply(commentId, acc.user_id, acc.token);
-                }
-              }
-            }
-          }
-        }
-
-        // 處理格式 B：舊版/傳統 entry 結構相容
-        if (Array.isArray(body.entry)) {
-          for (const entry of body.entry) {
-            if (!entry.changes) continue;
-            for (const change of entry.changes) {
-              if (change.field === "replies") {
-                const commentId = change.value.id;
-                const fromUserId = change.value.from ? change.value.from.id : null;
-
-                console.log(`[entry] 抓取到新留言 ID: ${commentId}, 來自用戶: ${fromUserId}`);
-
-                for (const acc of ACCOUNTS) {
-                  if (fromUserId === acc.user_id) continue;
-                  await autoReply(commentId, acc.user_id, acc.token);
-                }
+                console.log(`貼文作者 (ID: ${ownerId}) 不在當前受控清單中，不予處理`);
               }
             }
           }
@@ -191,7 +181,7 @@ export default {
 };
 
 async function autoReply(commentId, userId, token) {
-  const replyMessage = "感謝留言！🔥 通道細節已準備好，請直接加賴洽詢👉 @osc168";
+  const replyMessage = "感謝留言！🔥 通道細節已準備好，請直接加賴洽詢👉 @ osc168";
   const createUrl = `https://graph.threads.net/v1.0/${userId}/threads`;
   const createData = new URLSearchParams({
     media_type: "TEXT",
