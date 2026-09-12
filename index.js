@@ -126,36 +126,60 @@ export default {
       "user_id": "27669839782693594",
       "token": "THAAUHgwPgYZC5BYmE0czhVbm1qaTJYb0ptak9rS0V1ajQyYlFXakdRRl9rZAEY4emtrWmhGc2VtUmNpMzBjWWh4RnhTY2ZAZAelYycG02bzFRbzFHd3M5eUVNaTB4NElrazNLYzJfUDNsNWZAkZAUNxcmFXVG91S3VzX0tjUWpsRGZA3NlI3ZAwZDZD"
     }
-  
         ];
 
-        if (body.object === "threads" || body.object === "instagram") {
-          for (const entry of body.entry) {
-            if (!entry.changes) continue;
-            for (const change of entry.changes) {
-              console.log("檢查變更欄位:", change.field);
-              if (change.field === "replies") {
-                const commentId = change.value.id;
-                const fromUserId = change.value.from ? change.value.from.id : null;
-                
-                console.log("捕獲到新留言 ID:", commentId, "來自用戶:", fromUserId);
+        // 處理格式 A：Meta Threads Webhook (values 陣列)
+        if (Array.isArray(body.values)) {
+          for (const item of body.values) {
+            if (item.field === "replies" && item.value) {
+              const commentId = item.value.id;
+              const commenter = item.value.username;
+              const ownerId = item.value.root_post?.owner_id;
 
+              console.log(`[values] 抓取到新留言 ID: ${commentId}, 留言者: ${commenter}, 貼文主人: ${ownerId}`);
+
+              // 尋找貼文所屬的帳號進行回覆
+              const postOwnerAccount = ACCOUNTS.find(acc => acc.user_id === ownerId);
+
+              if (postOwnerAccount) {
+                if (commenter === postOwnerAccount.name) {
+                  console.log(`作者自己留言，跳過: ${postOwnerAccount.name}`);
+                  continue;
+                }
+                console.log(`貼文擁有者 [${postOwnerAccount.name}] 執行自動回覆...`);
+                await autoReply(commentId, postOwnerAccount.user_id, postOwnerAccount.token);
+              } else {
+                // 如果找不到對應的 owner_id，則讓清單中所有未重複的帳號回覆
                 for (const acc of ACCOUNTS) {
-                  const targetUserId = acc.user_id;
-                  const targetToken = acc.token;
-
-                  if (fromUserId === targetUserId) {
-                    console.log(`跳過自己回覆自己的帳號: ${acc.name}`);
-                    continue; 
-                  }
-
-                  console.log(`準備替帳號 [${acc.name}] 執行自動回覆...`);
-                  await autoReply(commentId, targetUserId, targetToken);
+                  if (commenter === acc.name) continue;
+                  console.log(`由帳號 [${acc.name}] 執行自動回覆...`);
+                  await autoReply(commentId, acc.user_id, acc.token);
                 }
               }
             }
           }
         }
+
+        // 處理格式 B：舊版/傳統 entry 結構相容
+        if (Array.isArray(body.entry)) {
+          for (const entry of body.entry) {
+            if (!entry.changes) continue;
+            for (const change of entry.changes) {
+              if (change.field === "replies") {
+                const commentId = change.value.id;
+                const fromUserId = change.value.from ? change.value.from.id : null;
+
+                console.log(`[entry] 抓取到新留言 ID: ${commentId}, 來自用戶: ${fromUserId}`);
+
+                for (const acc of ACCOUNTS) {
+                  if (fromUserId === acc.user_id) continue;
+                  await autoReply(commentId, acc.user_id, acc.token);
+                }
+              }
+            }
+          }
+        }
+
         return new Response("EVENT_RECEIVED", { status: 200 });
       } catch (error) {
         console.log("Webhook 處理發生嚴重錯誤:", error);
@@ -168,7 +192,7 @@ export default {
 
 async function autoReply(commentId, userId, token) {
   const replyMessage = "感謝留言！🔥 通道細節已準備好，請直接加賴洽詢👉 @osc168";
-  const createUrl = `https://graph.threads.net/v1.0/${userId}/threads`; // 這裡已修正加上 $ 符號
+  const createUrl = `https://graph.threads.net/v1.0/${userId}/threads`;
   const createData = new URLSearchParams({
     media_type: "TEXT",
     text: replyMessage,
@@ -180,7 +204,7 @@ async function autoReply(commentId, userId, token) {
     const createRes = await fetch(createUrl, { method: "POST", body: createData });
     const createJson = await createRes.json();
     console.log("建立回覆容器結果:", JSON.stringify(createJson));
-    
+
     if (createJson.id) {
       const publishUrl = `https://graph.threads.net/v1.0/${userId}/threads_publish`;
       const publishData = new URLSearchParams({
