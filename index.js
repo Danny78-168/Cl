@@ -18,26 +18,41 @@ export default {
     if (request.method === "POST") {
       try {
         const body = await request.json();
+        
+        // 從我們剛建立的 ACCOUNTS_JSON 檔案讀取所有帳號
+        let ACCOUNTS = [];
+        try {
+          const accountsFile = await import("./ACCOUNTS_JSON");
+          ACCOUNTS = accountsFile.default || accountsFile;
+        } catch (err) {
+          // 如果直接引入失敗，退回預設空陣列
+          ACCOUNTS = [];
+        }
+
         if (body.object === "threads" || body.object === "instagram") {
           for (const entry of body.entry) {
             for (const change of entry.changes) {
               if (change.field === "replies") {
                 const commentId = change.value.id;
-                const fromUserId = change.value.from.id;
+                const fromUserId = change.value.from ? change.value.from.id : null;
                 
-                // ⚠️ 在這裡填入你的資料
-                const MY_USER_ID = "27669839782693594";
-                const ACCESS_TOKEN = "THAAUHgwPgYZC5BYmE0czhVbm1qaTJYb0ptak9rS0V1ajQyYlFXakdRRl9rZAEY4emtrWmhGc2VtUmNpMzBjWWh4RnhTY2ZAZAelYycG02bzFRbzFHd3M5eUVNaTB4NElrazNLYzJfUDNsNWZAkZAUNxcmFXVG91S3VzX0tjUWpsRGZA3NlI3ZAwZDZD";
+                // 逐一檢查清單中的每個帳號
+                for (const acc of ACCOUNTS) {
+                  const targetUserId = acc.user_id || acc.userId;
+                  const targetToken = acc.token;
 
-                if (fromUserId === MY_USER_ID) continue;
+                  if (fromUserId === targetUserId) continue; // 避免自己回覆自己
 
-                await autoReply(commentId, MY_USER_ID, ACCESS_TOKEN);
+                  // 執行自動回覆
+                  await autoReply(commentId, targetUserId, targetToken);
+                }
               }
             }
           }
         }
         return new Response("EVENT_RECEIVED", { status: 200 });
       } catch (error) {
+        console.log("Webhook 處理錯誤", error);
         return new Response("Error", { status: 500 });
       }
     }
