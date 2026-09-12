@@ -1,6 +1,3 @@
-// 全域記憶體去重池（記錄最近已處理的留言 ID，防止 Meta 重複推送）
-const processedComments = new Set();
-
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -13,9 +10,8 @@ export default {
 
       if (mode === "subscribe" && token === VERIFY_TOKEN) {
         return new Response(challenge, { status: 200 });
-      } else {
-        return new Response("驗證失敗", { status: 403 });
       }
+      return new Response("驗證失敗", { status: 403 });
     }
 
     if (request.method === "POST") {
@@ -23,7 +19,7 @@ export default {
         const body = await request.json();
         console.log("收到 Webhook Body:", JSON.stringify(body));
 
-        // ⚠️ 請補上完整的 accounts 清單與各自的 username
+        // ⚠️ 請填寫完整的受控帳號清單與對應的 username（全小寫）
         const ACCOUNTS = [
           {
       "name": "吳芷晴",
@@ -130,7 +126,6 @@ export default {
       "user_id": "27669839782693594",
       "token": "THAAUHgwPgYZC5BYmE0czhVbm1qaTJYb0ptak9rS0V1ajQyYlFXakdRRl9rZAEY4emtrWmhGc2VtUmNpMzBjWWh4RnhTY2ZAZAelYycG02bzFRbzFHd3M5eUVNaTB4NElrazNLYzJfUDNsNWZAkZAUNxcmFXVG91S3VzX0tjUWpsRGZA3NlI3ZAwZDZD"
     }
-          // 其他帳號依此類推...
         ];
 
         const managedUsernames = ACCOUNTS.map(a => a.username?.toLowerCase()).filter(Boolean);
@@ -142,37 +137,40 @@ export default {
               const commenter = (item.value.username || "").toLowerCase();
               const ownerId = item.value.root_post?.owner_id;
 
-              // 🛑 防線 1：檢查此留言是否已經回覆過（防 Meta 重試重複發送）
-              if (processedComments.has(commentId)) {
-                console.log(`[去重攔截] 留言 ID: ${commentId} 已經處理過，跳過不重複回覆`);
-                continue;
-              }
-
-              // 🛑 防線 2：過濾機器人受控帳號自己留言
+              // 🛑 防線 1：檢查留言者是否為受控機器人
               if (managedUsernames.includes(commenter)) {
-                console.log(`[防循環] 留言者 ${commenter} 為受控帳號，跳過`);
+                console.log(`[防循環] 留言者 ${commenter} 為受控帳號，略過`);
                 continue;
               }
 
-              // 立即將此留言標記為已處理（鎖定）
-              processedComments.add(commentId);
-              // 防止記憶體暴增，限制集合最多留存最新 500 筆
-              if (processedComments.size > 500) {
-                const firstKey = processedComments.values().next().value;
-                processedComments.delete(firstKey);
+              // 🛑 防線 2：使用 Cloudflare 全域快取去重鎖（跨節點共享）
+              const cache = caches.default;
+              const cacheKey = new Request(`https://lock.internal/comment/${commentId}`);
+              const alreadyProcessed = await cache.match(cacheKey);
+
+              if (alreadyProcessed) {
+                console.log(`[全域去重攔截] 留言 ID: ${commentId} 已在快取中，略過重複請求`);
+                continue;
               }
 
-              // 尋找貼文作者回覆
+              // 立即寫入快取鎖定 120 秒
+              const lockResponse = new Response("locked", {
+                headers: { "Cache-Control": "max-age=120" }
+              });
+              ctx.waitUntil(cache.put(cacheKey, lockResponse));
+
+              // 尋找貼文作者
               const postOwner = ACCOUNTS.find(acc => acc.user_id === ownerId);
               if (postOwner) {
-                console.log(`[單次回覆] 由作者 [${postOwner.name}] 執行回覆...`);
-                // 將回覆交由背景或直接等待完成
-                await autoReply(commentId, postOwner.user_id, postOwner.token);
+                console.log(`[觸發回覆] 由作者 [${postOwner.name}] 執行背景回覆...`);
+                // 將耗時的 API 呼叫交給背景非同步處理，不阻塞當前回應
+                ctx.waitUntil(autoReply(commentId, postOwner.user_id, postOwner.token));
               }
             }
           }
         }
 
+        // 立即回傳 200，通知 Meta 已收到，不再觸發重傳
         return new Response("EVENT_RECEIVED", { status: 200 });
       } catch (error) {
         console.log("Webhook 處理異常:", error);
