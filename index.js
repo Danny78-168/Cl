@@ -1,3 +1,6 @@
+// 在最外層宣告全域 Set，阻擋同節點短時間內的重複並發
+const repliedUsersSet = new Set();
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -44,10 +47,7 @@ export default {
           { "name": "Cullen Reyes", "user_id": "27669839782693594" }
         ];
 
-        // 收集所有受控帳號的 user_id
         const managedUserIds = ACCOUNTS.map(a => a.user_id);
-        
-        // 專用回覆帳號：zhu zhu
         const ZHU_ZHU = ACCOUNTS.find(acc => acc.user_id === "28200981592893102");
 
         const entries = body.entry || [{ id: body.entry_id, changes: body.values }];
@@ -61,32 +61,49 @@ export default {
 
             if (field === "replies" || itemValue.id) {
               const commentId = itemValue.id;
+              // 取得留言者 ID (不同 webhook 格式可能在 from.id 或 user_id)
               const commenterId = itemValue.from?.id || itemValue.user_id;
+              const text = itemValue.text || "";
 
-              // 🛑 防線 1：如果留言者是我們自己的任一受控帳號（含 zhu zhu 本身），直接跳過
+              // 🛑 防線 1：受控帳號發的內容一律不回覆
               if (commenterId && managedUserIds.includes(commenterId)) {
-                console.log(`[過濾內部帳號] 留言者 ${commenterId} 為受控帳號，不執行自動回覆`);
+                console.log(`[過濾內部帳號] 留言者 ${commenterId} 為受控帳號，略過`);
                 continue;
               }
 
-              // 🛑 防線 2：Cloudflare 全域快取去重（確保此留言 ID 只會被回覆 1 次）
+              // 🛑 防線 2：如果留言內容本身就包含官方 LINE 關鍵字，代表是自己的回覆訊息被推播回來，絕對不回
+              if (text.includes("@osc168") || text.includes("感謝留言！")) {
+                console.log(`[死循環防護] 攔截到包含官方回覆詞的內容，略過`);
+                continue;
+              }
+
+              // 🛑 防線 3：記憶體去重（針對陌生用戶 ID）
+              if (commenterId && repliedUsersSet.has(commenterId)) {
+                console.log(`[記憶體去重] 用戶 ${commenterId} 已經被標記回覆過，略過`);
+                continue;
+              }
+
+              // 🛑 防線 4：快取層鎖定陌生用戶 ID（防止換節點時重複觸發，鎖定 24 小時）
               const cache = caches.default;
-              const cacheKey = new Request(`https://lock.internal/comment/${commentId}`);
-              const alreadyProcessed = await cache.match(cacheKey);
+              const userLockKey = new Request(`https://lock.internal/user/${commenterId}`);
+              const alreadyRepliedUser = await cache.match(userLockKey);
 
-              if (alreadyProcessed) {
-                console.log(`[去重攔截] 留言 ID: ${commentId} 先前已回覆過，略過`);
+              if (alreadyRepliedUser) {
+                console.log(`[全域快取攔截] 陌生用戶 ${commenterId} 先前已接收過回覆，略過`);
                 continue;
               }
 
-              // 寫入快取鎖（鎖定 1 小時，防止 Meta 重複推播相同 Webhook Event）
-              const lockResponse = new Response("locked", {
-                headers: { "Cache-Control": "max-age=3600" }
-              });
-              ctx.waitUntil(cache.put(cacheKey, lockResponse));
+              // 標記該陌生用戶（記憶體 + Cache 雙重鎖定）
+              if (commenterId) {
+                repliedUsersSet.add(commenterId);
+                const lockResponse = new Response("locked", {
+                  headers: { "Cache-Control": "max-age=86400" } // 鎖定 24 小時 (86400 秒)
+                });
+                ctx.waitUntil(cache.put(userLockKey, lockResponse));
+              }
 
-              // 🎯 執行回覆：固定只用「zhu zhu」的身份回應陌生用戶
-              console.log(`[觸發自動回覆] 偵測到陌生用戶 ${commenterId} 留言，由 [zhu zhu] 執行唯一一次回覆`);
+              // 🎯 執行回覆
+              console.log(`[觸發回覆] 陌生用戶 ${commenterId} 首度留言，由 zhu zhu 回覆一次`);
               ctx.waitUntil(autoReply(commentId, ZHU_ZHU.user_id, ZHU_ZHU.token));
             }
           }
